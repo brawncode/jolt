@@ -166,49 +166,50 @@ where
         
         let r_x_step = &outer_sumcheck_r[num_constraints_bits..];
 
-        let mut z: Vec<F> = flattened_polys.clone().into_iter().map(|poly| {
-            let mut resized = poly.Z.clone();
-            resized.resize(poly.len().next_power_of_two(), F::zero());
-            resized
-        }).flatten().collect();
-        z.resize(z.len().next_power_of_two(), F::zero());
-
+        // Binding 1: evaluating z on r_x_step
         let is_last_step = EqPolynomial::new(r_x_step.to_vec()).evaluate(&vec![F::one(); r_x_step.len()]);
         let eq_rx_step = EqPolynomial::evals(r_x_step);
 
-        // // Evals with binding. Doesn't ignore when r_x_step is the last step. 
-        // for r_s in r_x_step.iter().rev() {
-        //     poly_z.bound_poly_var_bot(r_s);
-        // }
-        // let mut evals = poly_z.evals();
-        // evals.push(F::one() - is_last_step); // ARASU: IGNORE LAST STEP? 
-        // evals.resize(evals.len().next_power_of_two() * 1, F::zero());
-
-        // Evals straightfoward
-        let mut evals: Vec<F> = (0..key.num_vars_uniform()) // until the constant (which is not included)
-        .map(|y_var| {
-            (0..(num_steps_padded-1)) // Ignore the last step
-                .map(|t| z[y_var * num_steps_padded + t] * eq_rx_step[t])
-                .sum()
-        })
-        .collect();
+        let mut evals: Vec<F> = flattened_polys
+            .par_iter()
+            .map(|poly| {
+                poly.Z
+                    .par_iter()
+                    .enumerate()
+                    .map(|(t, &val)| {
+                        if t == num_steps_padded - 1 { // ignore last step
+                            F::zero()
+                        } else {
+                            val * eq_rx_step[t]
+                        }
+                    })
+                    .sum()
+            })
+            .collect();
         evals.resize(evals.len().next_power_of_two(), F::zero());
-        evals.push(F::one() - is_last_step); // Constant, ignores the last step.  
+        evals.push(F::one() - is_last_step); // Constant, ignores the last step.
         evals.resize(evals.len().next_power_of_two(), F::zero());
 
         let eq_plus_one_rx_step: Vec<F> = (0..num_steps_padded)
             .map(|t| eq_plus_one(r_x_step, &crate::utils::index_to_field_bitvector(t, num_steps_bits), num_steps_bits))
             .collect();
 
-        let mut evals_shifted = (0..key.num_vars_uniform())
-            .map(|y_var: usize| {
-                (0..num_steps_padded-1) // Ignore the last step
-                    .map(|t| 
-                        z[y_var * num_steps_padded + t] * eq_plus_one_rx_step[t] 
-                    )
-                    .sum::<F>()
+        let mut evals_shifted: Vec<F> = flattened_polys
+            .par_iter()
+            .map(|poly| {
+                poly.Z
+                    .par_iter()
+                    .enumerate()
+                    .map(|(t, &val)| {
+                        if t == num_steps_padded - 1 { // ignore last step
+                            F::zero()
+                        } else {
+                            val * eq_plus_one_rx_step[t] 
+                        }
+                    })
+                    .sum()
             })
-            .collect::<Vec<F>>();
+            .collect();
         evals_shifted.resize(evals.len(), F::zero());
 
         let poly_z = DensePolynomial::new(evals.into_iter().chain(evals_shifted.into_iter()).collect());
@@ -243,14 +244,28 @@ where
         let r_y_var = inner_sumcheck_r[1..].to_vec();
         assert_eq!(r_y_var.len(), key.num_vars_uniform().next_power_of_two().log_2() + 1);
 
-        // Third sumcheck: the shift sumcheck
-        let mut poly_z2 = DensePolynomial::new(
-            z.clone().into_iter().chain(vec![F::zero(); z.len()].into_iter()).collect()
-        );
-        for r_s in r_y_var.iter() {
-            poly_z2.bound_poly_var_top(r_s);
-        }
-        let evals_z_r_y_var= poly_z2.evals(); 
+        let eq_ry_var = EqPolynomial::evals(&r_y_var);
+
+        // Binding 2: evaluating z on r_y_var
+        /* TODO(arasuarun): this might lead to inefficient memory paging 
+            as we access each poly in flattened_poly num_steps_padded-many times.
+        */ 
+        let mut evals_z_r_y_var: Vec<F> = (0..constraint_builder.uniform_repeat())
+            .map(|t| {
+                flattened_polys
+                    .par_iter()
+                    .enumerate()
+                    .map(|(i, poly)| {
+                        if t < poly.Z.len() {
+                            poly.Z[t] * eq_ry_var[i]
+                        } else {
+                            F::zero()
+                        }
+                    })
+                    .sum()
+            })
+            .collect();
+        evals_z_r_y_var.resize(num_steps_padded, F::zero());
 
         let num_rounds_shift_sumcheck = num_steps_bits; 
         let mut shift_sumcheck_polys = vec![DensePolynomial::new(evals_z_r_y_var), DensePolynomial::new(eq_plus_one_rx_step.clone())];
