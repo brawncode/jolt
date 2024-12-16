@@ -304,9 +304,6 @@ where
             transcript,
         );
 
-<<<<<<< HEAD
-        // Outer sumcheck claims: [A(r_x), B(r_x), C(r_x)]
-=======
         // Polynomial evals for shift sumcheck
         let chi2 = EqPolynomial::evals(&shift_sumcheck_r);
         let claimed_witness_evals_shift_sumcheck: Vec<_> = flattened_polys
@@ -323,7 +320,6 @@ where
         );
 
         // Outer sumcheck claims: [eq(r_x), A(r_x), B(r_x), C(r_x)]
->>>>>>> 0cd27f42 (final verifier pc checks done; crush finished)
         let outer_sumcheck_claims = (
             outer_sumcheck_claims[0],
             outer_sumcheck_claims[1],
