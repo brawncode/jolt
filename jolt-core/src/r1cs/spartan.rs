@@ -239,15 +239,16 @@ where
         
         drop_in_background_thread(polys);
 
-        let r_z = r_x_step; 
-
         let r_y_var = inner_sumcheck_r[1..].to_vec();
         assert_eq!(r_y_var.len(), key.num_vars_uniform().next_power_of_two().log_2() + 1);
 
         let eq_ry_var = EqPolynomial::evals(&r_y_var);
 
-        // Binding 2: evaluating z on r_y_var
-        /* TODO(arasuarun): this might lead to inefficient memory paging 
+        /*  Sumcheck 3: the shift sumcheck */
+
+        /*  Binding 2: evaluating z on r_y_var
+
+            TODO(arasuarun): this might lead to inefficient memory paging 
             as we access each poly in flattened_poly num_steps_padded-many times.
         */ 
         let mut evals_z_r_y_var: Vec<F> = (0..constraint_builder.uniform_repeat())
@@ -271,11 +272,12 @@ where
         let mut shift_sumcheck_polys = vec![DensePolynomial::new(evals_z_r_y_var), DensePolynomial::new(eq_plus_one_rx_step.clone())];
 
         let shift_sumcheck_claim = (0..((1 << num_rounds_shift_sumcheck) - 1))
+            .into_par_iter()
             .map(|i| {
                 let params: Vec<F> = shift_sumcheck_polys.iter().map(|poly| poly[i]).collect();
                 comb_func(&params)
             })
-            .fold(F::zero(), |acc, x| acc + x);
+            .reduce(|| F::zero(), |acc, x| acc + x);
 
         let (shift_sumcheck_proof, shift_sumcheck_r, shift_sumcheck_claims) =
             SumcheckInstanceProof::prove_arbitrary(
@@ -287,7 +289,8 @@ where
                 transcript);
         drop_in_background_thread(shift_sumcheck_polys);
 
-        let chi = EqPolynomial::evals(&r_z);
+        // Polynomial evals for inner sumcheck
+        let chi = EqPolynomial::evals(&r_x_step);
         let claimed_witness_evals: Vec<_> = flattened_polys
             .par_iter()
             .map(|poly| poly.evaluate_at_chi_low_optimized(&chi))
@@ -296,7 +299,7 @@ where
         opening_accumulator.append(
             &flattened_polys,
             DensePolynomial::new(chi),
-            r_z.to_vec(),
+            r_x_step.to_vec(),
             &claimed_witness_evals.iter().collect::<Vec<_>>(),
             transcript,
         );
